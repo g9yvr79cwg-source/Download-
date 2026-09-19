@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070b10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>DropLoad</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#060a0f;color:#f6f8fa;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.app{max-width:520px;margin:auto;min-height:100vh;padding:22px 16px 36px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:30px}.logo{font-size:29px;font-weight:850;letter-spacing:-1.2px}.pill{border:1px solid #2a3944;color:#9aa8b2;border-radius:999px;padding:7px 10px;font-size:11px}.hero h1{font-size:38px;line-height:1.02;letter-spacing:-1.8px;margin:0 0 10px}.hero p{margin:0;color:#8796a1;line-height:1.45}.card{margin-top:22px;background:linear-gradient(145deg,#111b24,#0b131a);border:1px solid #253641;border-radius:24px;padding:17px;box-shadow:0 18px 50px #0008}label{display:block;color:#95a4ae;font-size:11px;letter-spacing:.8px;margin-bottom:8px}.inputrow{display:flex;gap:8px}input{flex:1;min-width:0;background:#071017;color:#fff;border:1px solid #30424e;border-radius:14px;padding:15px;font-size:15px;outline:none}button{border:0;border-radius:14px;padding:14px 15px;font-weight:800;background:#29d9a1;color:#03100c}.paste{background:#1a2933;color:#eaf1f5}.analyze{width:100%;margin-top:10px}.status{min-height:20px;margin-top:12px;color:#93a2ad;font-size:13px}.media{display:none;margin-top:15px;border-top:1px solid #22313b;padding-top:15px}.thumb{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:15px;background:#081017}.title{font-size:17px;font-weight:750;margin:12px 0 4px}.muted{color:#7e8c96;font-size:12px}.formats{margin-top:12px}.format{display:flex;align-items:center;justify-content:space-between;border-top:1px solid #1d2b34;padding:12px 0;gap:10px}.format b{font-size:14px}.format small{display:block;color:#71808b;margin-top:3px}.download{padding:10px 13px;white-space:nowrap}.section{margin-top:24px}.section h3{margin:0 0 10px;font-size:16px}.empty{color:#65747e;font-size:13px}.history{border-top:1px solid #17232b}.item{display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid #17232b;font-size:13px}.item small{color:#66757f}.notice{margin-top:15px;color:#687780;font-size:11px;line-height:1.45}
+</style>
+</head>
+<body><main class="app">
+<header class="top"><div class="logo">DropLoad</div><div class="pill">iPhone XR</div></header>
+<section class="hero"><h1>Download.<br>Keep it simple.</h1><p>Paste a public media link, choose a format, and download.</p></section>
+<section class="card">
+<label>MEDIA LINK</label><div class="inputrow"><input id="url" placeholder="Paste URL"><button class="paste" onclick="paste()">Paste</button></div><button class="analyze" onclick="analyze()">Analyze link</button><div id="status" class="status"></div>
+<div id="media" class="media"><img id="thumb" class="thumb" alt=""><div id="title" class="title"></div><div id="meta" class="muted"></div><div id="formats" class="formats"></div></div>
+<div class="notice">Public/authorized media only. No DRM, private-account, paywall, login, or platform-restriction bypass.</div>
+</section>
+<section class="section"><h3>Recent downloads</h3><div id="history" class="history empty">No downloads yet.</div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+async function paste(){try{$('url').value=(await navigator.clipboard.readText()).trim()}catch(e){$('status').textContent='Paste the link into the box.'}}
+async function analyze(){const url=$('url').value.trim();if(!url){$('status').textContent='Paste a link first.';return} $('status').textContent='Analyzing…';$('media').style.display='none';try{const r=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Could not analyze this link');$('title').textContent=d.title||'Media';$('meta').textContent=[d.uploader,d.extractor,d.duration?formatDuration(d.duration):''].filter(Boolean).join(' • ');if(d.thumbnail){$('thumb').src=d.thumbnail;$('thumb').style.display='block'}else $('thumb').style.display='none';$('formats').innerHTML='';(d.formats||[]).forEach(f=>{const row=document.createElement('div');row.className='format';row.innerHTML=`<div><b>${esc(f.type.toUpperCase())} · ${esc(f.ext||'file')}</b><small>${esc(f.quality||'original')}${f.fps?' • '+esc(f.fps)+'fps':''}</small></div><button class="download">Download</button>`;row.querySelector('button').onclick=()=>download(url,f.id,f.ext);$('formats').appendChild(row)});$('media').style.display='block';$('status').textContent=d.formats?.length?'Choose a format.':'No compatible downloadable format found.'}catch(e){$('status').textContent=e.message}}
+async function download(url,format_id,ext){$('status').textContent='Preparing download…';try{const r=await fetch('/api/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,format_id,ext})});if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'Download failed')}const blob=await r.blob();const cd=r.headers.get('content-disposition')||'';let name='dropload-download.'+(ext||'mp4');const m=cd.match(/filename="?([^";]+)"?/i);if(m)name=m[1];const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),30000);save(name);$('status').textContent='Download ready.'}catch(e){$('status').textContent=e.message}}
+function save(name){const a=JSON.parse(localStorage.getItem('dropload_history')||'[]');a.unshift({name,time:new Date().toLocaleString()});localStorage.setItem('dropload_history',JSON.stringify(a.slice(0,15)));render()}
+function render(){const h=$('history'),a=JSON.parse(localStorage.getItem('dropload_history')||'[]');if(!a.length){h.className='history empty';h.textContent='No downloads yet.';return}h.className='history';h.innerHTML=a.map(x=>`<div class="item"><span>${esc(x.name)}</span><small>${esc(x.time)}</small></div>`).join('')}
+function formatDuration(s){s=Math.round(s);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+function esc(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}render();
+</script></body></html>
