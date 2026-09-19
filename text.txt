@@ -1,0 +1,146 @@
+from fastapi import FastAPI, Form, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+import yt_dlp
+import os
+import uuid
+import tempfile
+from pathlib import Path
+
+app = FastAPI(title="Media Downloader")
+
+# Simple HTML frontend (embedded)
+HTML_PAGE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Media Downloader</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family: system-ui, sans-serif; }
+    body { background:#0f0f0f; color:white; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+    .box { background:#1a1a1a; padding:32px; border-radius:16px; width:100%; max-width:480px; border:1px solid #333; }
+    h1 { text-align:center; margin-bottom:8px; }
+    p { text-align:center; color:#aaa; margin-bottom:24px; }
+    input, select { width:100%; padding:14px; margin-bottom:16px; border-radius:10px; border:1px solid #333; background:#111; color:white; font-size:1rem; }
+    button { width:100%; padding:16px; background:#ff6b00; border:none; border-radius:10px; color:white; font-size:1.1rem; font-weight:600; cursor:pointer; }
+    button:disabled { background:#555; }
+    #status { margin-top:16px; text-align:center; font-size:0.95rem; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>📥 Media Downloader</h1>
+    <p>Paste any video/audio link</p>
+    <input type="url" id="url" placeholder="https://youtube.com/...">
+    <select id="format">
+      <option value="best">Best Video</option>
+      <option value="audio">Audio only (MP3)</option>
+      <option value="720">720p</option>
+      <option value="480">480p</option>
+    </select>
+    <button onclick="download()" id="btn">Download</button>
+    <div id="status"></div>
+  </div>
+
+  <script>
+    async function download() {
+      const url = document.getElementById('url').value.trim();
+      const format = document.getElementById('format').value;
+      const btn = document.getElementById('btn');
+      const status = document.getElementById('status');
+
+      if (!url) { status.innerText = "Please enter a URL"; return; }
+
+      btn.disabled = true;
+      btn.innerText = "Downloading... please wait";
+      status.innerText = "Working... this can take 10–60 seconds";
+
+      try {
+        const res = await fetch('/download', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: new URLSearchParams({url, format})
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Download failed");
+        }
+
+        // Get the file
+        const blob = await res.blob();
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = res.headers.get('content-disposition')?.split('filename=')[1]?.replace(/"/g,'') || 'media.mp4';
+        a.click();
+        window.URL.revokeObjectURL(downloadUrl);
+
+        status.innerText = "✅ Download started!";
+      } catch (e) {
+        status.innerText = "❌ " + e.message;
+      }
+
+      btn.disabled = false;
+      btn.innerText = "Download";
+    }
+  </script>
+</body>
+</html>
+"""
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return HTML_PAGE
+
+@app.post("/download")
+async def download(url: str = Form(...), format: str = Form("best")):
+    temp_dir = tempfile.mkdtemp()
+    outtmpl = os.path.join(temp_dir, "%(title)s.%(ext)s")
+
+    ydl_opts = {
+        "outtmpl": outtmpl,
+        "quiet": True,
+        "noplaylist": True,
+    }
+
+    if format == "audio":
+        ydl_opts.update({
+            "format": "bestaudio/best",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+        })
+    elif format == "720":
+        ydl_opts["format"] = "bestvideo[height<=720]+bestaudio/best[height<=720]"
+    elif format == "480":
+        ydl_opts["format"] = "bestvideo[height<=480]+bestaudio/best[height<=480]"
+    else:
+        ydl_opts["format"] = "bestvideo+bestaudio/best"
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            if format == "audio":
+                filename = os.path.splitext(filename)[0] + ".mp3"
+
+        if not os.path.exists(filename):
+            # Sometimes yt-dlp changes the name slightly
+            files = list(Path(temp_dir).glob("*"))
+            if files:
+                filename = str(files[0])
+            else:
+                raise Exception("File not found after download")
+
+        return FileResponse(
+            path=filename,
+            filename=os.path.basename(filename),
+            media_type="application/octet-stream"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
